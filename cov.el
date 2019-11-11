@@ -140,7 +140,7 @@ COVERAGE-TOOL has created the data.
 
 Currently the only supported COVERAGE-TOOL is gcov.")
 
-(defvar cov-coverage-file-paths '("." cov--locate-coveralls cov--locate-clover)
+(defvar cov-coverage-file-paths '("." cov--locate-coveralls cov--locate-clover cov--locate-gocover)
   "List of paths or functions returning file paths containing coverage files.
 
 Relative paths:
@@ -231,6 +231,14 @@ Looks for a `clover.xml' file. Return nil it not found."
     (when dir
       (cons (file-truename (f-join dir "clover.xml")) 'clover))))
 
+(defun cov--locate-gocover (file-dir _file-name)
+  "Locate go test coverage from FILE-DIR for FILE-NAME.
+
+Looks for a `coverage.txt' file. Return nil it not found."
+  (let ((dir (locate-dominating-file file-dir "coverage.txt")))
+    (when dir
+      (cons (file-truename (f-join dir "coverage.txt")) 'gocover))))
+
 (defun cov--coverage ()
   "Return coverage file and tool.
 
@@ -311,6 +319,38 @@ of (FILE . (LINE-NUM TIMES-RAN))."
                 (push (list line-num line-count) file-coverage))))
           ;; Clover uses absolute filenames, so we remove the common prefix.
           (push (cons (string-remove-prefix common file-name) file-coverage) matches))))
+    matches))
+
+(defun cov--gocover-parse ()
+  "Parse go cover coverage.
+
+Parse go cover data in `(current-buffer)' and return a list
+of (FILE . (LINE-NUM TIMES-RAN))."
+  (let ((regex "^\\([^:]+\\):\\([0-9]+\\)\\.\\([0-9]+\\),\\([0-9]+\\)\\.\\([0-9]+\\) \\([0-9]+\\) \\([0-9]+\\)$")
+        (prefix (expand-file-name "src" (substring (shell-command-to-string "go env GOPATH") 0 -1)))
+        (matches (list)))
+    (save-match-data
+      (while (re-search-forward regex nil t)
+        ;; assume file is in GOPATH/src
+        (let* ((file-name (expand-file-name (match-string 1) prefix))
+               (common (f-common-parent (list file-name cov-coverage-file)))
+               (base-name (string-remove-prefix common file-name))
+               (start-line (string-to-number (match-string 2)))
+               (end-line (string-to-number (match-string 4)))
+               (count (string-to-number (match-string 7)))
+               (match (assoc base-name matches)))
+          ;; need to return alist where FILE contains all LINE-NUM and
+          ;; TIMES-RAN - so look if we have already got base-name in
+          ;; matches first
+          (when (> count 0)
+            (unless match
+              (setq match (cons base-name nil))
+              (push match matches))
+            (while (<= start-line end-line)
+              ;; index from 1
+              (push (list start-line count)
+                    (cdr (assoc base-name matches)))
+              (incf start-line))))))
     matches))
 
 (defun cov--read-and-parse (file-path format)
